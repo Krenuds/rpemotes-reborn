@@ -2,16 +2,25 @@
 -- Loaded after PedEmoteManager.lua; consumes PedEmoteManagerAPI global.
 
 local API = PedEmoteManagerAPI
-local pedPlayEmote     = API.pedPlayEmote
-local pedCancelEmote   = API.pedCancelEmote
-local pedGetState      = API.pedGetState
-local pedUntrack       = API.pedUntrack
-local pedSetWalkstyle  = API.pedSetWalkstyle
-local pedSetExpression = API.pedSetExpression
+local pedPlayEmote       = API.pedPlayEmote
+local pedCancelEmote     = API.pedCancelEmote
+local pedGetState        = API.pedGetState
+local pedUntrack         = API.pedUntrack
+local pedSetWalkstyle    = API.pedSetWalkstyle
+local pedSetExpression   = API.pedSetExpression
+local pedShowEmoji       = API.pedShowEmoji
+local pedPlaySharedEmote = API.pedPlaySharedEmote
 
 local EmoteDataLookup      = API.EmoteDataLookup
 local WalkDataLookup       = API.WalkDataLookup
 local ExpressionDataLookup = API.ExpressionDataLookup
+
+local EmojiKeys = {
+    'grin', 'skull', 'rage', 'cry', 'joy', 'poop', 'wink', 'scream',
+    'heart', 'sleeping', 'sunglasses', 'thinking', 'heart_eyes',
+    'star_struck', 'cursing', 'thumbs_up', 'thumbs_down', 'exploding_head',
+    'nauseated', 'partying',
+}
 
 local TestPeds = {}
 
@@ -122,6 +131,39 @@ RegisterCommand('ped_expr', function(source, args)
             print(("^2[test] [%d] pedSetExpression(%d, '%s') = %s^0"):format(i, ped, exprName, tostring(pedSetExpression(ped, exprName))))
         end
     end
+end, true)
+
+RegisterCommand('ped_emoji', function(source, args)
+    if source > 0 then return end
+    local emojiName = args[1]
+    if not emojiName then print("^1Usage: ped_emoji <name> [index]^0") return end
+
+    local idx = tonumber(args[2])
+    if idx then
+        local ped = TestPeds[idx]
+        if not ped then print("^1No ped at index " .. idx .. "^0") return end
+        print(("^2[test] pedShowEmoji(%d, '%s') = %s^0"):format(ped, emojiName, tostring(pedShowEmoji(ped, emojiName))))
+    else
+        for i, ped in ipairs(TestPeds) do
+            print(("^2[test] [%d] pedShowEmoji(%d, '%s') = %s^0"):format(i, ped, emojiName, tostring(pedShowEmoji(ped, emojiName))))
+        end
+    end
+end, true)
+
+RegisterCommand('ped_shared', function(source, args)
+    if source > 0 then return end
+    local emoteName = args[1]
+    local idx1 = tonumber(args[2]) or 1
+    local idx2 = tonumber(args[3]) or 2
+    if not emoteName then print("^1Usage: ped_shared <name> [idx1] [idx2]^0") return end
+
+    local ped1 = TestPeds[idx1]
+    local ped2 = TestPeds[idx2]
+    if not ped1 then print("^1No ped at index " .. idx1 .. "^0") return end
+    if not ped2 then print("^1No ped at index " .. idx2 .. "^0") return end
+
+    local result = pedPlaySharedEmote(ped1, ped2, emoteName)
+    print(("^2[test] pedPlaySharedEmote(%d, %d, '%s') = %s^0"):format(ped1, ped2, emoteName, tostring(result)))
 end, true)
 
 RegisterCommand('ped_list', function(source, args)
@@ -263,7 +305,7 @@ RegisterCommand('ped_cycle', function(source, args)
     local interval = (tonumber(args[2]) or 5) * 1000
 
     if not category then
-        print("^1Usage: ped_cycle <emotes|dances|props|ptfx|walks|expr|all> [seconds]^0")
+        print("^1Usage: ped_cycle <emotes|dances|props|ptfx|walks|expr|emoji|shared|all> [seconds]^0")
         return
     end
 
@@ -297,6 +339,39 @@ RegisterCommand('ped_cycle', function(source, args)
         local items = collectExpressionNames()
         startCycle('expressions', items, interval, function(ped, name) pedSetExpression(ped, name) end)
 
+    elseif category == 'emoji' then
+        startCycle('emojis', EmojiKeys, interval, function(ped, name) pedShowEmoji(ped, name) end)
+
+    elseif category == 'shared' then
+        -- Shared emotes need pairs, not individual peds
+        local items = collectEmoteNames(function(e) return e.secondPlayersAnim ~= nil end)
+        if #items == 0 then print("^1[test] No shared emotes found^0") return end
+        if #TestPeds < 2 then print("^1[test] Need at least 2 test peds^0") return end
+
+        stopCycling()
+        CycleState.active = true
+        local token = CycleState.token
+
+        -- Build pairs: (1,2), (3,4), (5,6)
+        local pairs = {}
+        for i = 1, #TestPeds - 1, 2 do
+            pairs[#pairs + 1] = { TestPeds[i], TestPeds[i + 1] }
+        end
+
+        print(("^2[test] Cycling %d shared emotes every %ds on %d pairs^0"):format(#items, interval / 1000, #pairs))
+
+        CreateThread(function()
+            while CycleState.active and CycleState.token == token do
+                for _, pair in ipairs(pairs) do
+                    if DoesEntityExist(pair[1]) and DoesEntityExist(pair[2]) then
+                        local name = items[math.random(#items)]
+                        pedPlaySharedEmote(pair[1], pair[2], name)
+                    end
+                end
+                Wait(interval)
+            end
+        end)
+
     elseif category == 'all' then
         -- Cycle emotes from every category
         local items = collectEmoteNames()
@@ -304,7 +379,7 @@ RegisterCommand('ped_cycle', function(source, args)
 
     else
         print("^1Unknown category: " .. category .. "^0")
-        print("^1Options: emotes, dances, props, ptfx, walks, expr, all^0")
+        print("^1Options: emotes, dances, props, ptfx, walks, expr, emoji, all^0")
     end
 end, true)
 
