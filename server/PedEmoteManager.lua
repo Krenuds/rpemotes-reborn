@@ -244,6 +244,34 @@ local function validateEntity(entityId)
     return true
 end
 
+local function buildPedState(entityId, entry, resolved)
+    local existing = PedStates[entityId]
+    PedStates[entityId] = {
+        emoteName  = entry.name,
+        emoteType  = entry.emoteType,
+        resolved   = resolved,
+        ptfxActive = resolved.ptfx ~= nil,
+        walk       = existing and existing.walk or nil,
+        expression = existing and existing.expression or nil,
+    }
+end
+
+local function clearAllPedStateBags(entityId)
+    if not DoesEntityExist(entityId) then return end
+    local state = Entity(entityId).state
+    state:set('rpemotes:ped:emote', nil, true)
+    state:set('rpemotes:ped:ptfx', nil, true)
+    state:set('rpemotes:ped:walk', nil, true)
+    state:set('rpemotes:ped:expression', nil, true)
+    state:set('rpemotes:ped:emoji', nil, true)
+end
+
+local function autoStartPtfx(entityId, resolved)
+    if resolved.ptfx then
+        Entity(entityId).state:set('rpemotes:ped:ptfx', resolved.ptfx, true)
+    end
+end
+
 local function pedPlayEmote(entityId, emoteName, textureVariation, options)
     if not validateEntity(entityId) then return false end
 
@@ -267,20 +295,8 @@ local function pedPlayEmote(entityId, emoteName, textureVariation, options)
     resolved.blockEvents = opts.blockEvents ~= false
     Entity(entityId).state:set('rpemotes:ped:emote', resolved, true)
 
-    -- Auto-start PTFX (peds don't press G)
-    if resolved.ptfx then
-        Entity(entityId).state:set('rpemotes:ped:ptfx', resolved.ptfx, true)
-    end
-
-    local existing = PedStates[entityId]
-    PedStates[entityId] = {
-        emoteName  = entry.name,
-        emoteType  = entry.emoteType,
-        resolved   = resolved,
-        ptfxActive = resolved.ptfx ~= nil,
-        walk       = existing and existing.walk or nil,
-        expression = existing and existing.expression or nil,
-    }
+    autoStartPtfx(entityId, resolved)
+    buildPedState(entityId, entry, resolved)
 
     return true
 end
@@ -313,13 +329,7 @@ end
 local function pedUntrack(entityId)
     if not entityId then return false end
 
-    if DoesEntityExist(entityId) then
-        Entity(entityId).state:set('rpemotes:ped:ptfx', nil, true)
-        Entity(entityId).state:set('rpemotes:ped:emote', nil, true)
-        Entity(entityId).state:set('rpemotes:ped:walk', nil, true)
-        Entity(entityId).state:set('rpemotes:ped:expression', nil, true)
-    end
-
+    clearAllPedStateBags(entityId)
     PedStates[entityId] = nil
     return true
 end
@@ -458,13 +468,39 @@ local function pedPlaySharedEmote(entityId1, entityId2, emoteName, textureVariat
     local resolved1 = resolveEmoteData(entry1, textureVariation)
     local resolved2 = resolveEmoteData(entry2, textureVariation)
 
-    -- Embed partner reference for client-side positioning
-    resolved2.partnerNetId = NetworkGetNetworkIdFromEntity(entityId1)
+    -- Upstream: source (ped1) always gets positioned relative to target (ped2)
+    -- SyncOffset always applied to ped1; Attachto may apply to either ped
 
-    -- SyncOffset: positioning data lives on the primary entry, apply to ped2
-    if resolved1.syncOffset and not resolved2.attachTo then
-        resolved2.syncOffset = resolved1.syncOffset
+    -- Ped1 (source): always gets syncOffset positioning relative to ped2
+    resolved1.partnerNetId = NetworkGetNetworkIdFromEntity(entityId2)
+    resolved1.syncOffset = resolved1.syncOffset or { side = 0.0, front = 1.0, height = 0.0, heading = 180.0 }
+
+    -- Ped1 may also get Attachto if primary entry has it
+    -- (resolved1.attachTo already set by resolveEmoteData)
+
+    -- Ped2 (target): gets Attachto only if secondary has it AND primary doesn't
+    if resolved2.attachTo and not resolved1.attachTo then
+        resolved2.partnerNetId = NetworkGetNetworkIdFromEntity(entityId1)
+    elseif resolved2.attachTo and resolved1.attachTo then
+        -- Primary takes precedence; don't double-attach
+        resolved2.attachTo = nil
     end
+
+    -- Debug: log positioning mode for both peds
+    local mode1, mode2 = 'syncOffset', 'none'
+    local off = resolved1.syncOffset
+    mode1 = string.format('syncOffset(side=%.2f front=%.2f height=%.2f heading=%.1f)',
+        off.side, off.front, off.height, off.heading)
+    if resolved1.attachTo then
+        local att = resolved1.attachTo
+        mode1 = mode1 .. string.format(' + attachTo(bone=%d)', att.bone)
+    end
+    if resolved2.attachTo then
+        local att = resolved2.attachTo
+        mode2 = string.format('attachTo(bone=%d pos=%.2f,%.2f,%.2f)', att.bone, att.pos.x, att.pos.y, att.pos.z)
+    end
+    print(string.format('^3[rpemotes:ped] SharedEmote: %s + %s | ped1=%d(%s) ped2=%d(%s)^0',
+        entry1.name, entry2.name, entityId1, mode1, entityId2, mode2))
 
     resolved1.blockEvents = true
     resolved2.blockEvents = true
@@ -473,34 +509,11 @@ local function pedPlaySharedEmote(entityId1, entityId2, emoteName, textureVariat
     Entity(entityId1).state:set('rpemotes:ped:emote', resolved1, true)
     Entity(entityId2).state:set('rpemotes:ped:emote', resolved2, true)
 
-    -- Auto-start PTFX on both if present
-    if resolved1.ptfx then
-        Entity(entityId1).state:set('rpemotes:ped:ptfx', resolved1.ptfx, true)
-    end
-    if resolved2.ptfx then
-        Entity(entityId2).state:set('rpemotes:ped:ptfx', resolved2.ptfx, true)
-    end
+    autoStartPtfx(entityId1, resolved1)
+    autoStartPtfx(entityId2, resolved2)
 
-    -- Track both in PedStates
-    local existing1 = PedStates[entityId1]
-    PedStates[entityId1] = {
-        emoteName  = entry1.name,
-        emoteType  = entry1.emoteType,
-        resolved   = resolved1,
-        ptfxActive = resolved1.ptfx ~= nil,
-        walk       = existing1 and existing1.walk or nil,
-        expression = existing1 and existing1.expression or nil,
-    }
-
-    local existing2 = PedStates[entityId2]
-    PedStates[entityId2] = {
-        emoteName  = entry2.name,
-        emoteType  = entry2.emoteType,
-        resolved   = resolved2,
-        ptfxActive = resolved2.ptfx ~= nil,
-        walk       = existing2 and existing2.walk or nil,
-        expression = existing2 and existing2.expression or nil,
-    }
+    buildPedState(entityId1, entry1, resolved1)
+    buildPedState(entityId2, entry2, resolved2)
 
     return true
 end
@@ -547,14 +560,7 @@ AddEventHandler('onResourceStop', function(resource)
     if resource ~= GetCurrentResourceName() then return end
 
     for entityId in pairs(PedStates) do
-        if DoesEntityExist(entityId) then
-            local state = Entity(entityId).state
-            state:set('rpemotes:ped:emote', nil, true)
-            state:set('rpemotes:ped:ptfx', nil, true)
-            state:set('rpemotes:ped:walk', nil, true)
-            state:set('rpemotes:ped:expression', nil, true)
-            state:set('rpemotes:ped:emoji', nil, true)
-        end
+        clearAllPedStateBags(entityId)
     end
 
     PedStates = {}

@@ -7,17 +7,6 @@ local PedEmojis = {}          -- entity handle → { emoji, expireTime }
 local pedEmojiDrawActive = false
 local PedAttached = {}        -- entity handle → true (peds attached via Attachto)
 
-local function loadAnimDict(dict)
-    if not DoesAnimDictExist(dict) then return false end
-    RequestAnimDict(dict)
-    local timeout = 2000
-    while not HasAnimDictLoaded(dict) and timeout > 0 do
-        Wait(5)
-        timeout = timeout - 5
-    end
-    return timeout > 0
-end
-
 local function loadPropModel(model)
     local hash = GetHashKey(model)
     if HasModelLoaded(hash) then return true end
@@ -113,7 +102,7 @@ local function playPedAnim(entity, data)
         DebugPrint("[rpemotes:ped] No dict/anim for entity " .. entity)
         return
     end
-    if not loadAnimDict(data.dict) then
+    if not LoadAnim(data.dict) then
         DebugPrint("[rpemotes:ped] Failed to load anim dict '" .. data.dict .. "'")
         return
     end
@@ -337,6 +326,44 @@ local function showPedEmoji(entity, value)
     startPedEmojiDrawLoop()
 end
 
+local function applySharedPositioning(entity, emoteData)
+    if not emoteData.partnerNetId then return end
+
+    local partner = NetworkGetEntityFromNetworkId(emoteData.partnerNetId)
+    DebugPrint(string.format("[rpemotes:ped] Shared positioning: netId=%d partner=%d exists=%s",
+        emoteData.partnerNetId, partner, tostring(partner ~= 0 and DoesEntityExist(partner))))
+    if partner == 0 or not DoesEntityExist(partner) then return end
+
+    -- Unfreeze for positioning (test peds are frozen)
+    FreezeEntityPosition(entity, false)
+
+    -- Attachto: bone-based attachment
+    if emoteData.attachTo then
+        local att = emoteData.attachTo
+        DebugPrint(string.format("[rpemotes:ped] AttachTo: bone=%d pos=%.2f,%.2f,%.2f rot=%.2f,%.2f,%.2f",
+            att.bone or 0, att.pos.x, att.pos.y, att.pos.z, att.rot.x, att.rot.y, att.rot.z))
+        AttachEntityToEntity(
+            entity, partner,
+            GetPedBoneIndex(partner, att.bone or 0),
+            att.pos.x, att.pos.y, att.pos.z,
+            att.rot.x, att.rot.y, att.rot.z,
+            false, false, false, true, 1, true
+        )
+        PedAttached[entity] = true
+    end
+
+    -- SyncOffset: always runs (upstream always positions source ped)
+    if emoteData.syncOffset then
+        local off = emoteData.syncOffset
+        local coords = GetOffsetFromEntityInWorldCoords(partner, off.side, off.front, off.height)
+        local heading = GetEntityHeading(partner)
+        DebugPrint(string.format("[rpemotes:ped] SyncOffset: side=%.2f front=%.2f height=%.2f heading=%.1f -> h=%.1f",
+            off.side, off.front, off.height, off.heading, heading - off.heading))
+        SetEntityHeading(entity, heading - off.heading)
+        SetEntityCoordsNoOffset(entity, coords.x, coords.y, coords.z)
+    end
+end
+
 local function cancelPedVisuals(entity)
     stopPedPtfx(entity)
     cleanupPedProps(entity)
@@ -372,30 +399,7 @@ AddStateBagChangeHandler('rpemotes:ped:emote', '', function(bagName, key, value,
 
         spawnPedProps(entity, value)
         playPedAnim(entity, value)
-
-        -- Shared emote positioning
-        if value.partnerNetId then
-            local partner = NetworkGetEntityFromNetworkId(value.partnerNetId)
-            if partner ~= 0 and DoesEntityExist(partner) then
-                if value.attachTo then
-                    local att = value.attachTo
-                    AttachEntityToEntity(
-                        entity, partner,
-                        GetPedBoneIndex(partner, att.bone or 0),
-                        att.pos.x, att.pos.y, att.pos.z,
-                        att.rot.x, att.rot.y, att.rot.z,
-                        false, false, false, true, 1, true
-                    )
-                    PedAttached[entity] = true
-                elseif value.syncOffset then
-                    local off = value.syncOffset
-                    local coords = GetOffsetFromEntityInWorldCoords(partner, off.side, off.front, off.height)
-                    local heading = GetEntityHeading(partner)
-                    SetEntityCoordsNoOffset(entity, coords.x, coords.y, coords.z)
-                    SetEntityHeading(entity, heading - off.heading)
-                end
-            end
-        end
+        applySharedPositioning(entity, value)
     else
         DebugPrint("[rpemotes:ped] Cancelling emote on entity " .. entity)
 
@@ -515,8 +519,9 @@ PedEmoteHandlerAPI = {
     stopPedPtfx      = stopPedPtfx,
     spawnPedProps    = spawnPedProps,
     applyPtfx        = applyPtfx,
-    cancelPedVisuals = cancelPedVisuals,
-    cancelPedTasks   = cancelPedTasks,
+    cancelPedVisuals       = cancelPedVisuals,
+    cancelPedTasks         = cancelPedTasks,
+    applySharedPositioning = applySharedPositioning,
     playPedAnim      = playPedAnim,
     applyWalk        = applyWalk,
     applyExpression  = applyExpression,

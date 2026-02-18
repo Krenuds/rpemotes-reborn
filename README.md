@@ -97,6 +97,36 @@ exports["rpemotes-reborn"]:setWalkstyle(name, force) -- name = "move_m@alien" or
 exports["rpemotes-reborn"]:toggleWalkstyle(bool, message) -- bool to allow the user to change their walkstyle in the menu or not / message to show the user (optional, default is :"You are unable to change your walking style right now.")"
 ```
 
+## Ped Emotes API (Server-Side)
+
+Server-side exports for remotely animating NPCs. Uses the same animation data as the player menu — supports emotes, props, PTFX, walk styles, expressions, and shared emotes on any non-player ped.
+
+```lua
+-- Play / cancel emotes
+exports["rpemotes-reborn"]:pedPlayEmote(entityId, emoteName, textureVariation?, options?)
+exports["rpemotes-reborn"]:pedCancelEmote(entityId)
+
+-- Shared emotes (two peds)
+exports["rpemotes-reborn"]:pedPlaySharedEmote(entityId1, entityId2, emoteName, textureVariation?)
+
+-- Walk styles & expressions
+exports["rpemotes-reborn"]:pedSetWalkstyle(entityId, walkName?)   -- nil to reset
+exports["rpemotes-reborn"]:pedSetExpression(entityId, exprName?)  -- nil to reset
+
+-- PTFX control (auto-starts with emote; these are for manual toggle)
+exports["rpemotes-reborn"]:pedStartPtfx(entityId)
+exports["rpemotes-reborn"]:pedStopPtfx(entityId)
+
+-- Emoji (floating text above ped, auto-expires after 5s)
+exports["rpemotes-reborn"]:pedShowEmoji(entityId, emojiName)
+
+-- State & cleanup
+exports["rpemotes-reborn"]:pedGetState(entityId)  -- returns state table or nil
+exports["rpemotes-reborn"]:pedUntrack(entityId)    -- clears all state bags & tracking
+```
+
+Emote/walk/expression names are the same keys used in `AnimationList.lua` (e.g. `"guitar"`, `"Drunk"`, `"Angry"`). Entity must be a non-player ped that exists on the server.
+
 Having issues with players using emotes when/where they're not supposed to? Use the following where needed. This would be somewhere like if you want to disable emotes in jail or when someone is handcuffed/escorted. We've also added one for blocking emote cancels!
 
 ```lua

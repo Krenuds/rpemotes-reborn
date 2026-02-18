@@ -12,30 +12,7 @@ CreateThread(function()
                 if pending.emote then
                     API.spawnPedProps(entity, pending.emote)
                     API.playPedAnim(entity, pending.emote)
-
-                    -- Shared emote positioning (deferred)
-                    if pending.emote.partnerNetId then
-                        local partner = NetworkGetEntityFromNetworkId(pending.emote.partnerNetId)
-                        if partner ~= 0 and DoesEntityExist(partner) then
-                            if pending.emote.attachTo then
-                                local att = pending.emote.attachTo
-                                AttachEntityToEntity(
-                                    entity, partner,
-                                    GetPedBoneIndex(partner, att.bone or 0),
-                                    att.pos.x, att.pos.y, att.pos.z,
-                                    att.rot.x, att.rot.y, att.rot.z,
-                                    false, false, false, true, 1, true
-                                )
-                                API.PedAttached[entity] = true
-                            elseif pending.emote.syncOffset then
-                                local off = pending.emote.syncOffset
-                                local coords = GetOffsetFromEntityInWorldCoords(partner, off.side, off.front, off.height)
-                                local heading = GetEntityHeading(partner)
-                                SetEntityCoordsNoOffset(entity, coords.x, coords.y, coords.z)
-                                SetEntityHeading(entity, heading - off.heading)
-                            end
-                        end
-                    end
+                    API.applySharedPositioning(entity, pending.emote)
                 end
                 if pending.ptfx then
                     API.applyPtfx(entity, pending.ptfx)
