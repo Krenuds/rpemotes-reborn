@@ -58,8 +58,9 @@ local function indexEmoteCategory(categoryName, emoteTable)
         if data.scenario     then entry.scenario     = data.scenario end
         if data.scenarioType then entry.scenarioType = data.scenarioType end
 
-        entry.label            = data[3] or data.label or name
-        entry.AnimationOptions = data.AnimationOptions
+        entry.label              = data[3] or data.label or name
+        entry.secondPlayersAnim  = data[4] or data.secondPlayersAnim
+        entry.AnimationOptions   = data.AnimationOptions
 
         EmoteDataLookup[string.lower(name)] = entry
         count = count + 1
@@ -207,6 +208,25 @@ local function resolveEmoteData(emoteEntry, textureVariation)
     end
 
     resolved.ptfx = resolvePtfx(animOpt)
+
+    -- SyncOffset positioning (for shared emotes)
+    if animOpt.SyncOffsetFront or animOpt.SyncOffsetSide then
+        resolved.syncOffset = {
+            side    = animOpt.SyncOffsetSide    or 0.0,
+            front   = animOpt.SyncOffsetFront   or 1.0,
+            height  = animOpt.SyncOffsetHeight  or 0.0,
+            heading = animOpt.SyncOffsetHeading or 180.0,
+        }
+    end
+
+    -- Attachto positioning (for shared emotes)
+    if animOpt.Attachto then
+        resolved.attachTo = {
+            bone = animOpt.bone or 0,
+            pos  = animOpt.pos or vector3(animOpt.xPos or 0.0, animOpt.yPos or 0.0, animOpt.zPos or 0.0),
+            rot  = animOpt.rot or vector3(animOpt.xRot or 0.0, animOpt.yRot or 0.0, animOpt.zRot or 0.0),
+        }
+    end
 
     return resolved
 end
@@ -393,7 +413,101 @@ local function pedSetExpression(entityId, expressionName)
     return true
 end
 
-exports('pedPlayEmote',     pedPlayEmote)
+local function pedShowEmoji(entityId, emojiName)
+    if not validateEntity(entityId) then return false end
+    if not emojiName or type(emojiName) ~= "string" or emojiName == "" then return false end
+
+    Entity(entityId).state:set('rpemotes:ped:emoji', { emoji = emojiName, expire = 5000 }, true)
+
+    SetTimeout(5000, function()
+        if DoesEntityExist(entityId) then
+            Entity(entityId).state:set('rpemotes:ped:emoji', nil, true)
+        end
+    end)
+
+    return true
+end
+
+local function pedPlaySharedEmote(entityId1, entityId2, emoteName, textureVariation)
+    if not validateEntity(entityId1) then return false end
+    if not validateEntity(entityId2) then return false end
+    if entityId1 == entityId2 then return false end
+
+    local entry1 = EmoteDataLookup[string.lower(emoteName)]
+    if not entry1 then
+        print(string.format("^1[rpemotes:ped] Shared emote '%s' not found^0", tostring(emoteName)))
+        return false
+    end
+
+    local secondAnimName = entry1.secondPlayersAnim
+    if not secondAnimName then
+        print(string.format("^1[rpemotes:ped] Emote '%s' has no secondPlayersAnim^0", emoteName))
+        return false
+    end
+
+    local entry2 = EmoteDataLookup[string.lower(secondAnimName)]
+    if not entry2 then
+        print(string.format("^1[rpemotes:ped] Secondary emote '%s' not found^0", secondAnimName))
+        return false
+    end
+
+    -- Cancel any existing emotes on both peds
+    pedCancelEmote(entityId1)
+    pedCancelEmote(entityId2)
+
+    local resolved1 = resolveEmoteData(entry1, textureVariation)
+    local resolved2 = resolveEmoteData(entry2, textureVariation)
+
+    -- Embed partner reference for client-side positioning
+    resolved2.partnerNetId = NetworkGetNetworkIdFromEntity(entityId1)
+
+    -- SyncOffset: positioning data lives on the primary entry, apply to ped2
+    if resolved1.syncOffset and not resolved2.attachTo then
+        resolved2.syncOffset = resolved1.syncOffset
+    end
+
+    resolved1.blockEvents = true
+    resolved2.blockEvents = true
+
+    -- Set state bags on both simultaneously
+    Entity(entityId1).state:set('rpemotes:ped:emote', resolved1, true)
+    Entity(entityId2).state:set('rpemotes:ped:emote', resolved2, true)
+
+    -- Auto-start PTFX on both if present
+    if resolved1.ptfx then
+        Entity(entityId1).state:set('rpemotes:ped:ptfx', resolved1.ptfx, true)
+    end
+    if resolved2.ptfx then
+        Entity(entityId2).state:set('rpemotes:ped:ptfx', resolved2.ptfx, true)
+    end
+
+    -- Track both in PedStates
+    local existing1 = PedStates[entityId1]
+    PedStates[entityId1] = {
+        emoteName  = entry1.name,
+        emoteType  = entry1.emoteType,
+        resolved   = resolved1,
+        ptfxActive = resolved1.ptfx ~= nil,
+        walk       = existing1 and existing1.walk or nil,
+        expression = existing1 and existing1.expression or nil,
+    }
+
+    local existing2 = PedStates[entityId2]
+    PedStates[entityId2] = {
+        emoteName  = entry2.name,
+        emoteType  = entry2.emoteType,
+        resolved   = resolved2,
+        ptfxActive = resolved2.ptfx ~= nil,
+        walk       = existing2 and existing2.walk or nil,
+        expression = existing2 and existing2.expression or nil,
+    }
+
+    return true
+end
+
+exports('pedShowEmoji',        pedShowEmoji)
+exports('pedPlaySharedEmote',  pedPlaySharedEmote)
+exports('pedPlayEmote',        pedPlayEmote)
 exports('pedCancelEmote',   pedCancelEmote)
 exports('pedGetState',      pedGetState)
 exports('pedUntrack',       pedUntrack)
@@ -416,12 +530,14 @@ end)
 
 -- Global API for commands.lua and other consumers
 PedEmoteManagerAPI = {
-    pedPlayEmote     = pedPlayEmote,
-    pedCancelEmote   = pedCancelEmote,
-    pedGetState      = pedGetState,
-    pedUntrack       = pedUntrack,
-    pedSetWalkstyle  = pedSetWalkstyle,
-    pedSetExpression = pedSetExpression,
+    pedPlayEmote       = pedPlayEmote,
+    pedCancelEmote     = pedCancelEmote,
+    pedGetState        = pedGetState,
+    pedUntrack         = pedUntrack,
+    pedSetWalkstyle    = pedSetWalkstyle,
+    pedSetExpression   = pedSetExpression,
+    pedShowEmoji       = pedShowEmoji,
+    pedPlaySharedEmote = pedPlaySharedEmote,
     EmoteDataLookup      = EmoteDataLookup,
     WalkDataLookup       = WalkDataLookup,
     ExpressionDataLookup = ExpressionDataLookup,
@@ -437,6 +553,7 @@ AddEventHandler('onResourceStop', function(resource)
             state:set('rpemotes:ped:ptfx', nil, true)
             state:set('rpemotes:ped:walk', nil, true)
             state:set('rpemotes:ped:expression', nil, true)
+            state:set('rpemotes:ped:emoji', nil, true)
         end
     end
 

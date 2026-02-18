@@ -3,6 +3,9 @@ local PedPtfx = {}
 local PedPtfxAssets = {}
 local PedPtfxRepeat = {} -- tokens for repeating one-shot PTFX threads
 local PedPending = {}
+local PedEmojis = {}          -- entity handle → { emoji, expireTime }
+local pedEmojiDrawActive = false
+local PedAttached = {}        -- entity handle → true (peds attached via Attachto)
 
 local function loadAnimDict(dict)
     if not DoesAnimDictExist(dict) then return false end
@@ -262,9 +265,85 @@ local function applyExpression(entity, anim)
     SetFacialIdleAnimOverride(entity, anim, 0)
 end
 
+-- Emoji rendering --
+
+local function pedDrawText3D(coords, text)
+    local onScreen, x, y = World3dToScreen2d(coords.x, coords.y, coords.z)
+    if onScreen then
+        local camCoords = GetGameplayCamCoord()
+        local dist = #(coords - camCoords)
+        local scale = (1 / dist) * 2
+        local fov = (1 / GetGameplayCamFov()) * 100
+        scale = scale * fov * 0.6
+
+        SetTextScale(0.0, scale)
+        SetTextFont(4)
+        SetTextProportional(true)
+        SetTextColour(255, 255, 255, 255)
+        SetTextDropshadow(0, 0, 0, 0, 255)
+        SetTextEdge(2, 0, 0, 0, 150)
+        SetTextDropShadow()
+        SetTextOutline()
+        SetTextEntry("STRING")
+        SetTextCentre(true)
+        AddTextComponentString(text)
+        DrawText(x, y)
+    end
+end
+
+local function startPedEmojiDrawLoop()
+    if pedEmojiDrawActive then return end
+    pedEmojiDrawActive = true
+
+    CreateThread(function()
+        while pedEmojiDrawActive do
+            local playerCoords = GetEntityCoords(PlayerPedId())
+            local now = GetGameTimer()
+
+            for entity, data in pairs(PedEmojis) do
+                if not DoesEntityExist(entity) then
+                    PedEmojis[entity] = nil
+                elseif now >= data.expireTime then
+                    PedEmojis[entity] = nil
+                else
+                    local pedCoords = GetEntityCoords(entity)
+                    if #(playerCoords - pedCoords) <= 30.0 then
+                        local drawCoords = vector3(pedCoords.x, pedCoords.y, pedCoords.z + 1.0)
+                        pedDrawText3D(drawCoords, data.emoji)
+                    end
+                end
+            end
+
+            if not next(PedEmojis) then
+                pedEmojiDrawActive = false
+            end
+
+            Wait(0)
+        end
+    end)
+end
+
+local function showPedEmoji(entity, value)
+    -- Resolve emoji key → character if EmojiData is available
+    local emoji = value.emoji
+    if EmojiData and EmojiData[emoji] then
+        emoji = EmojiData[emoji]
+    end
+
+    PedEmojis[entity] = {
+        emoji      = emoji,
+        expireTime = GetGameTimer() + (value.expire or 5000),
+    }
+    startPedEmojiDrawLoop()
+end
+
 local function cancelPedVisuals(entity)
     stopPedPtfx(entity)
     cleanupPedProps(entity)
+    if PedAttached[entity] then
+        DetachEntity(entity, true, false)
+        PedAttached[entity] = nil
+    end
 end
 
 local function cancelPedTasks(entity)
@@ -293,6 +372,30 @@ AddStateBagChangeHandler('rpemotes:ped:emote', '', function(bagName, key, value,
 
         spawnPedProps(entity, value)
         playPedAnim(entity, value)
+
+        -- Shared emote positioning
+        if value.partnerNetId then
+            local partner = NetworkGetEntityFromNetworkId(value.partnerNetId)
+            if partner ~= 0 and DoesEntityExist(partner) then
+                if value.attachTo then
+                    local att = value.attachTo
+                    AttachEntityToEntity(
+                        entity, partner,
+                        GetPedBoneIndex(partner, att.bone or 0),
+                        att.pos.x, att.pos.y, att.pos.z,
+                        att.rot.x, att.rot.y, att.rot.z,
+                        false, false, false, true, 1, true
+                    )
+                    PedAttached[entity] = true
+                elseif value.syncOffset then
+                    local off = value.syncOffset
+                    local coords = GetOffsetFromEntityInWorldCoords(partner, off.side, off.front, off.height)
+                    local heading = GetEntityHeading(partner)
+                    SetEntityCoordsNoOffset(entity, coords.x, coords.y, coords.z)
+                    SetEntityHeading(entity, heading - off.heading)
+                end
+            end
+        end
     else
         DebugPrint("[rpemotes:ped] Cancelling emote on entity " .. entity)
 
@@ -361,6 +464,26 @@ AddStateBagChangeHandler('rpemotes:ped:expression', '', function(bagName, key, v
     end
 end)
 
+AddStateBagChangeHandler('rpemotes:ped:emoji', '', function(bagName, key, value, _unused, replicated)
+    if not bagName:find('^entity:') then return end
+
+    local entity = GetEntityFromStateBagName(bagName)
+
+    if entity == 0 or not DoesEntityExist(entity) then
+        if value then
+            if not PedPending[bagName] then PedPending[bagName] = {} end
+            PedPending[bagName].emoji = value
+        end
+        return
+    end
+
+    if value then
+        showPedEmoji(entity, value)
+    else
+        PedEmojis[entity] = nil
+    end
+end)
+
 AddEventHandler('onResourceStop', function(resource)
     if resource ~= GetCurrentResourceName() then return end
 
@@ -381,6 +504,9 @@ AddEventHandler('onResourceStop', function(resource)
     PedPtfxAssets = {}
     PedProps = {}
     PedPending = {}
+    PedEmojis = {}
+    pedEmojiDrawActive = false
+    PedAttached = {}
 end)
 
 -- Global API consumed by PedEmoteCleanup.lua (loaded after this file)
@@ -394,8 +520,11 @@ PedEmoteHandlerAPI = {
     playPedAnim      = playPedAnim,
     applyWalk        = applyWalk,
     applyExpression  = applyExpression,
+    showPedEmoji     = showPedEmoji,
     PedProps         = PedProps,
     PedPtfx          = PedPtfx,
     PedPtfxAssets    = PedPtfxAssets,
     PedPending       = PedPending,
+    PedEmojis        = PedEmojis,
+    PedAttached      = PedAttached,
 }
