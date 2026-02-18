@@ -33,7 +33,8 @@ server_scripts {
     'server/Server.lua',
     'server/Updates.lua',
     'server/emojis.lua',
-    'server/GroupEmote.lua'
+    'server/GroupEmote.lua',
+    'server/PedEmoteManager.lua',
 }
 
 client_scripts {
@@ -60,6 +61,8 @@ client_scripts {
     'client/Walk.lua',
     'client/Placement.lua',
     'client/emojis.lua',
+    'client/PedEmoteHandler.lua',
+    'client/PedEmoteCleanup.lua',
 }
 
 data_file 'DLC_ITYP_REQUEST' 'stream/rpemotesreborn_props.ytyp'
