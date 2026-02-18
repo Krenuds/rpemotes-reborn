@@ -35,6 +35,7 @@ server_scripts {
     'server/emojis.lua',
     'server/GroupEmote.lua',
     'server/PedEmoteManager.lua',
+    'server/commands.lua',
 }
 
 client_scripts {

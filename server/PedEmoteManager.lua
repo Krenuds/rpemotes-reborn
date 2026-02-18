@@ -414,6 +414,19 @@ CreateThread(function()
     end
 end)
 
+-- Global API for commands.lua and other consumers
+PedEmoteManagerAPI = {
+    pedPlayEmote     = pedPlayEmote,
+    pedCancelEmote   = pedCancelEmote,
+    pedGetState      = pedGetState,
+    pedUntrack       = pedUntrack,
+    pedSetWalkstyle  = pedSetWalkstyle,
+    pedSetExpression = pedSetExpression,
+    EmoteDataLookup      = EmoteDataLookup,
+    WalkDataLookup       = WalkDataLookup,
+    ExpressionDataLookup = ExpressionDataLookup,
+}
+
 AddEventHandler('onResourceStop', function(resource)
     if resource ~= GetCurrentResourceName() then return end
 
